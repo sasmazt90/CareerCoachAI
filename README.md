@@ -1,40 +1,42 @@
 # CareerCoachAI (AIApply-benzeri kişisel platform)
 
-Bu proje, kişisel kullanım için job intake + CV upload + OpenAI destekli içerik üretimi + başvuru takip dashboard akışını tek platformda çalıştırır.
+Bu proje job intake + çoklu CV upload + OpenAI destekli içerik üretimi + ATS odaklı başvuru + mülakat simülasyonu akışını sağlar.
 
 ## Özellikler
-- Web arayüzünden profil yönetimi
-- OpenAI API Secret girme alanı (`/settings`)
-- CV dosyası upload etme (`/cvs/upload`)
-- İş ilanı ekleme (`/jobs/new`)
-- Otomatik eşleşme (ülke, pozisyon, minimum maaş)
-- OpenAI ile role-specific:
-  - Tailored CV metni
-  - Cover letter
-  - Başvuru sorularına yanıt
-- Dashboard üzerinden tüm başvuru kayıtlarını görüntüleme
+- OpenAI API Secret (`/settings`)
+- Çoklu CV upload (`.txt/.pdf/.docx/.doc`) ve tüm CV'lerden ortak bilgi havuzu
+- Ülke için English multi-select
+- Çoklu para birimi (`USD/EUR/GBP/TRY/AED`) ve USD normalize eşleştirme
+- ATS keyword odaklı CV + Cover Letter üretimi
+- Cover Letter ayrı sayfa (`/cover-letters`)
+- Job intake (`/jobs/new`)
+- 2 aşamalı mülakat simülasyonu (`/interview`):
+  - Stage 1: HR Manager
+  - Stage 2: Unit Manager
+  - scoring + recommendation + retry + "YOU GOT THE JOB"
 
 ## Kurulum
 ```bash
 cd CareerCoachAI
+python -m venv .venv
+# Windows: .venv\Scripts\activate
+# macOS/Linux: source .venv/bin/activate
+pip install -e .
 python -m app.main
 ```
 
 ## Kullanım
-1. `http://127.0.0.1:8000/settings` → OpenAI API key kaydet.
-2. `http://127.0.0.1:8000/profile-form` → aday profilini doldur.
-3. `http://127.0.0.1:8000/cvs/upload` → CV yükle.
-4. `http://127.0.0.1:8000/jobs/new` → ilanları ekle.
-5. `http://127.0.0.1:8000/dashboard` → **Generate Applications** ile otomatik üretimi çalıştır.
+1. `/settings` OpenAI key
+2. `/profile-form` profil + ülke + min maaş + currency
+3. `/cvs/upload` birden fazla CV yükle
+4. `/jobs/new` ilan ekle
+5. `/dashboard` Generate Applications
+6. `/cover-letters` cover letter görüntüle
+7. `/interview` mülakat simülasyonu
 
-> Not: OpenAI key girilmezse fallback şablon üretimi kullanılır.
-
-## JSON API uçları
-- `POST /profile`
-- `POST /cvs`
-- `POST /jobs`
-- `POST /auto-apply`
-- `GET /applications`
+## Önemli Not
+Sistem promptları “facts only / no hallucination” kuralıyla hazırlanmıştır.
+Yine de nihai gönderimden önce manuel doğrulama önerilir.
 
 ## Test
 ```bash
