@@ -276,7 +276,7 @@ def list_applications() -> list[dict]:
     with get_conn() as conn:
         rows = conn.execute(
             """
-            SELECT a.id, j.company, j.position, j.country, j.salary_amount, j.salary_currency, j.salary_usd,
+            SELECT a.id, a.job_id, j.company, j.position, j.country, j.salary_amount, j.salary_currency, j.salary_usd,
                    c.title as cv_title, a.tailored_cv, a.cover_letter, a.answers, a.status, a.notes, a.created_at
             FROM applications a
             JOIN jobs j ON j.id = a.job_id

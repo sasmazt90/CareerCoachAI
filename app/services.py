@@ -60,6 +60,39 @@ def match_job(profile: dict, job: dict) -> MatchResult:
     return MatchResult(matched=True, reason="All criteria satisfied")
 
 
+
+
+def profile_match_score(profile: dict, job: dict) -> dict:
+    score = 0
+    details = []
+
+    country_ok = _normalize(job.get("country", "")) in {_normalize(c) for c in profile.get("countries", [])}
+    if country_ok:
+        score += 30
+        details.append("Country match: +30")
+    else:
+        details.append("Country mismatch: +0")
+
+    salary_ok = int(job.get("salary_usd", 0)) >= int(profile.get("minimum_salary_usd", 0))
+    if salary_ok:
+        score += 30
+        details.append("Salary match: +30")
+    else:
+        details.append("Salary below threshold: +0")
+
+    job_terms = _expand_position_terms(job.get("position", ""))
+    target_terms = set()
+    for t in profile.get("target_positions", []):
+        target_terms |= _expand_position_terms(t)
+    pos_ok = any((jt in target_terms) or (tt in jt) or (jt in tt) for jt in job_terms for tt in target_terms)
+    if pos_ok:
+        score += 40
+        details.append("Position match: +40")
+    else:
+        details.append("Position mismatch: +0")
+
+    return {"match_percent": max(0, min(100, score)), "details": details}
+
 def build_cv_knowledge(cvs: list[dict], profile: dict, api_key: str = "") -> str:
     cv_corpus = "\n\n".join(f"[{cv['title']}]\n{cv['content']}" for cv in cvs)
     if api_key:

@@ -78,7 +78,7 @@ def test_full_flow_and_interview_pages():
     s, apps = api_get_json("/applications")
     assert s == 200 and len(apps) == 1
 
-    for page in ["/", "/dashboard", "/cover-letters", "/interview", "/settings", "/profile-form", "/jobs/new", "/cvs/upload"]:
+    for page in ["/", "/dashboard", "/salary-intel", "/cover-letters", "/interview", "/settings", "/profile-form", "/jobs/new", "/cvs/upload"]:
         s, t = api_get_text(page)
         assert s == 200
         assert "<html" in t

@@ -9,6 +9,7 @@ Bu proje job intake + çoklu CV upload + OpenAI destekli içerik üretimi + ATS 
 - Çoklu para birimi (`USD/EUR/GBP/TRY/AED`) ve USD normalize eşleştirme
 - ATS keyword odaklı CV + Cover Letter üretimi
 - Cover Letter ayrı sayfa (`/cover-letters`)
+- Salary Intelligence (`/salary-intel`): match % + expected salary + market/policy farkı
 - Job intake (`/jobs/new`)
 - 2 aşamalı mülakat simülasyonu (`/interview`):
   - real-time akustik (audio DSP) analizi: stress/confidence index (.wav upload)
@@ -32,8 +33,9 @@ python -m app.main
 3. `/cvs/upload` birden fazla CV yükle
 4. `/jobs/new` ilan ekle
 5. `/dashboard` Generate Applications
-6. `/cover-letters` cover letter görüntüle
-7. `/interview` mülakat simülasyonu (metin + opsiyonel .wav ses yükleyerek DSP analizi)
+6. `/salary-intel` maaş analizi
+7. `/cover-letters` cover letter görüntüle
+8. `/interview` mülakat simülasyonu (metin + opsiyonel .wav ses yükleyerek DSP analizi)
 
 ## Önemli Not
 Sistem promptları “facts only / no hallucination” kuralıyla hazırlanmıştır.
