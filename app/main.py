@@ -4,7 +4,7 @@ import cgi
 import html
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -81,6 +81,54 @@ CITIES_BY_COUNTRY = {
     "Luxembourg": ["Luxembourg City", "Esch-sur-Alzette"],
 }
 
+
+
+COUNTRY_CURRENCY = {
+    "Germany": "EUR", "Netherlands": "EUR", "United Kingdom": "GBP", "United Arab Emirates": "AED", "Turkey": "TRY",
+    "United States": "USD", "Canada": "USD", "Ireland": "EUR", "Sweden": "EUR", "Switzerland": "EUR",
+    "Spain": "EUR", "Italy": "EUR", "France": "EUR", "Portugal": "EUR", "Belgium": "EUR", "Austria": "EUR",
+    "Denmark": "EUR", "Norway": "EUR", "Finland": "EUR", "Poland": "EUR", "Czechia": "EUR", "Hungary": "EUR",
+    "Romania": "EUR", "Bulgaria": "EUR", "Greece": "EUR", "Luxembourg": "EUR",
+}
+
+DEFAULT_SCREENING_QUESTIONS = [
+    "Why are you a fit for this role?",
+    "What measurable impact did you deliver in a similar role?",
+    "How would you approach the first 90 days?",
+]
+
+
+def infer_job_facts(company: str, position: str, country: str, description: str) -> dict:
+    text = f"{position} {description}".lower()
+    if any(k in text for k in ["head", "director", "vp", "chief"]):
+        seniority = "lead"
+    elif any(k in text for k in ["senior", "principal", "staff"]):
+        seniority = "senior"
+    elif any(k in text for k in ["intern", "junior", "entry"]):
+        seniority = "junior"
+    else:
+        seniority = "mid"
+
+    currency = COUNTRY_CURRENCY.get(country, "USD")
+
+    # quick market heuristic in USD, then convert
+    base_usd = {"junior": 55000, "mid": 85000, "senior": 115000, "lead": 140000}[seniority]
+    if "manager" in text:
+        base_usd *= 1.08
+    if "engineer" in text or "scientist" in text:
+        base_usd *= 1.05
+    if "head" in text or "director" in text:
+        base_usd *= 1.12
+    salary_usd = int(round(base_usd))
+    salary_amount = salary_usd if currency == "USD" else round(salary_usd / CURRENCY_RATES_TO_USD.get(currency, 1.0), 2)
+
+    return {
+        "seniority": seniority,
+        "salary_currency": currency,
+        "salary_usd": salary_usd,
+        "salary_amount": salary_amount,
+        "questions": DEFAULT_SCREENING_QUESTIONS,
+    }
 
 def esc(v: object) -> str:
     return html.escape(str(v))
@@ -187,23 +235,28 @@ class AppHandler(BaseHTTPRequestHandler):
 
             if p == "/jobs/new":
                 f = self._form()
-                amount = float((f.get("salary_amount") or ["0"])[0] or 0)
-                curr = ((f.get("salary_currency") or ["USD"])[0]).upper()
+                company = (f.get("company") or [""])[0]
+                position = (f.get("position") or [""])[0]
+                country = (f.get("country") or [""])[0]
+                city = (f.get("city") or [""])[0]
+                description = (f.get("description") or [""])[0]
+                inferred = infer_job_facts(company, position, country, description)
                 add_job(
                     {
-                        "company": (f.get("company") or [""])[0],
-                        "position": (f.get("position") or [""])[0],
-                        "country": (f.get("country") or [""])[0],
-                        "salary_amount": amount,
-                        "salary_currency": curr,
-                        "salary_usd": to_usd(amount, curr),
-                        "description": (f.get("description") or [""])[0],
-                        "questions": [x.strip() for x in (f.get("questions") or [""])[0].split("\n") if x.strip()],
-                        "seniority": (f.get("seniority") or ["mid"])[0],
+                        "company": company,
+                        "position": position,
+                        "country": country,
+                        "city": city,
+                        "salary_amount": inferred["salary_amount"],
+                        "salary_currency": inferred["salary_currency"],
+                        "salary_usd": inferred["salary_usd"],
+                        "description": description,
+                        "questions": inferred["questions"],
+                        "seniority": inferred["seniority"],
                         "source_url": (f.get("source_url") or [""])[0],
                     }
                 )
-                return self._redirect("/dashboard")
+                return self._redirect("/dashboard?msg=job_saved")
 
             if p == "/cvs/upload":
                 fs = cgi.FieldStorage(fp=self.rfile, headers=self.headers, environ={"REQUEST_METHOD": "POST", "CONTENT_TYPE": self.headers.get("Content-Type", "")})
@@ -220,7 +273,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     if not blob:
                         continue
                     safe = re.sub(r"[^a-zA-Z0-9._-]", "_", name)
-                    sp = UPLOAD_DIR / f"{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}_{safe}"
+                    sp = UPLOAD_DIR / f"{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}_{safe}"
                     sp.write_bytes(blob)
                     add_cv({"title": f"{title} #{i}", "content": extract_text(name, blob), "original_filename": name, "stored_path": str(sp)})
                     saved += 1
@@ -231,9 +284,17 @@ class AppHandler(BaseHTTPRequestHandler):
             if p == "/auto-apply":
                 profile, cvs, jobs = get_profile(), list_cvs(), list_jobs()
                 if not profile:
-                    return self._send(400, {"error": "profile missing"})
+                    if self.headers.get("Content-Type", "").startswith("application/json"):
+                        return self._send(400, {"error": "profile missing"})
+                    return self._redirect("/dashboard?msg=profile_missing")
                 if not cvs:
-                    return self._send(400, {"error": "cv missing"})
+                    if self.headers.get("Content-Type", "").startswith("application/json"):
+                        return self._send(400, {"error": "cv missing"})
+                    return self._redirect("/dashboard?msg=cv_missing")
+                if not jobs:
+                    if self.headers.get("Content-Type", "").startswith("application/json"):
+                        return self._send(400, {"error": "job missing"})
+                    return self._redirect("/dashboard?msg=job_missing")
                 key = get_openai_api_key()
                 corpus = build_cv_knowledge(cvs, profile, key)
                 created = 0
@@ -242,12 +303,12 @@ class AppHandler(BaseHTTPRequestHandler):
                         continue
                     cv = tailor_cv(cvs[0]["content"], job, profile, corpus, key)
                     cl = create_cover_letter(job, profile, corpus, key)
-                    ans = auto_answer_questions(job["questions"], profile, job, corpus, key)
+                    ans = auto_answer_questions(job.get("questions", []), profile, job, corpus, key)
                     add_application(job["id"], cvs[0]["id"], cv, cl, ans, status="ready_to_submit", notes="ATS+facts only")
                     created += 1
                 if self.headers.get("Content-Type", "").startswith("application/json"):
                     return self._send(200, {"applications_created": created})
-                return self._redirect("/dashboard")
+                return self._redirect(f"/dashboard?msg=applications_created:{created}")
 
             if p == "/interview/start":
                 f = self._form(); iid = create_interview(int((f.get("job_id") or ["0"])[0]), int((f.get("stage") or ["1"])[0]))
@@ -320,7 +381,9 @@ class AppHandler(BaseHTTPRequestHandler):
         try:
             if p == "/":
                 apps, jobs, cvs = list_applications(), list_jobs(), list_cvs()
-                body = f"<div class='grid'><div class='card'><span class='badge'>Applications</span><h3>{len(apps)}</h3></div><div class='card'><span class='badge'>Jobs</span><h3>{len(jobs)}</h3></div><div class='card'><span class='badge'>CV Versions</span><h3>{len(cvs)}</h3></div></div><div class='card'><form method='post' action='/auto-apply'><button>Run Auto Apply</button></form></div>"
+                msg = (q.get('msg') or [''])[0]
+                alert = f"<div class='card'><strong>{esc(msg.replace('_', ' '))}</strong></div>" if msg else ''
+                body = f"{alert}<div class='grid'><div class='card'><span class='badge'>Applications</span><h3>{len(apps)}</h3></div><div class='card'><span class='badge'>Jobs</span><h3>{len(jobs)}</h3></div><div class='card'><span class='badge'>CV Versions</span><h3>{len(cvs)}</h3></div></div><div class='card'><form method='post' action='/auto-apply'><button>Run Auto Apply</button></form></div>"
                 return self._send(200, page("CareerCoachAI Platform", body), "text/html; charset=utf-8")
 
             if p == "/settings":
@@ -392,30 +455,102 @@ class AppHandler(BaseHTTPRequestHandler):
                 return self._send(200, page("Candidate Profile", body), "text/html; charset=utf-8")
 
             if p == "/cvs/upload":
-                rows = "".join(f"<tr><td>{esc(c['title'])}</td><td>{esc(c.get('original_filename', ''))}</td><td>{esc((c.get('content') or '')[:120])}...</td></tr>" for c in list_cvs())
-                empty_cv = "<tr><td colspan='3'>No CV uploaded.</td></tr>"
-                body = f"<div class='card'><form method='post' action='/cvs/upload' enctype='multipart/form-data'><label>CV Group Title</label><input name='title' value='My CV Collection'/><label>CV Files (.txt/.pdf/.docx/.doc)</label><input type='file' name='cv_files' multiple required/><br/><br/><button>Upload</button></form></div><div class='card'><table><thead><tr><th>Title</th><th>File</th><th>Preview</th></tr></thead><tbody>{rows or empty_cv}</tbody></table></div>"
+                rows = "".join(
+                    f"<tr><td>{esc(c['title'])}</td><td>{esc(c.get('original_filename', ''))}</td><td>{esc((c.get('content') or '')[:120])}...</td><td><a href='/cvs/preview?id={esc(c['id'])}'>Preview</a></td></tr>"
+                    for c in list_cvs()
+                )
+                empty_cv = "<tr><td colspan='4'>No CV uploaded.</td></tr>"
+                body = f"<div class='card'><form method='post' action='/cvs/upload' enctype='multipart/form-data'><label>CV Group Title</label><input name='title' value='My CV Collection'/><label>CV Files (.txt/.pdf/.docx/.doc)</label><input type='file' name='cv_files' multiple required/><br/><br/><button>Upload</button></form></div><div class='card'><table><thead><tr><th>Title</th><th>File</th><th>Excerpt</th><th>Preview</th></tr></thead><tbody>{rows or empty_cv}</tbody></table></div>"
                 return self._send(200, page("CV Upload", body), "text/html; charset=utf-8")
 
+            if p == "/cvs/preview":
+                cid = int((q.get("id") or ["0"])[0] or 0)
+                cv = next((c for c in list_cvs() if int(c.get("id", 0)) == cid), None)
+                if not cv:
+                    return self._send(404, page("CV Preview", "<div class='card'>CV not found.</div>"), "text/html; charset=utf-8")
+                body = f"<div class='card'><h3>{esc(cv.get('title', 'CV'))}</h3><p><strong>File:</strong> {esc(cv.get('original_filename', ''))}</p><pre>{esc(cv.get('content', ''))}</pre></div>"
+                return self._send(200, page("CV Preview", body), "text/html; charset=utf-8")
+
             if p == "/jobs/new":
-                co = "".join(f"<option>{esc(c)}</option>" for c in COUNTRIES)
-                cu = "".join(f"<option>{esc(c)}</option>" for c in CURRENCY_RATES_TO_USD)
-                body = f"<div class='card'><form method='post' action='/jobs/new'><label>Company</label><input name='company' required/><label>Position</label><input name='position' required/><label>Country</label><select name='country'>{co}</select><label>Salary Amount</label><input type='number' name='salary_amount' value='100000'/><label>Salary Currency</label><select name='salary_currency'>{cu}</select><label>Description</label><textarea name='description' rows='5'></textarea><label>Questions (one per line)</label><textarea name='questions' rows='4' placeholder='Why do you want to work here?&#10;Tell us about a project with measurable impact.'></textarea><p class='hint'>Bu alan, ilan portalındaki ek sorular içindir. Auto-apply sırasında bu sorulara profile/CV verisine göre yanıt üretilir.</p><label>Seniority</label><select name='seniority'><option>junior</option><option selected>mid</option><option>senior</option><option>lead</option></select><label>Source URL</label><input name='source_url'/><br/><br/><button>Save Job</button></form></div>"
+                co = "".join(f"<option value='{esc(c)}'>{esc(c)}</option>" for c in COUNTRIES)
+                body = f"""
+                <div class='card'>
+                  <form method='post' action='/jobs/new'>
+                    <label>Company</label><input name='company' required/>
+                    <label>Position</label><input name='position' required/>
+                    <label>Country</label><select id='job-country' name='country'>{co}</select>
+                    <label>City</label><select id='job-city' name='city'></select>
+                    <label>Description</label><textarea name='description' rows='5' required></textarea>
+                    <label>Source URL</label><input name='source_url'/>
+                    <p class='hint'>Seniority, currency, salary ve screening questions bilgileri otomatik olarak AI/heuristic ile çıkarılır.</p>
+                    <br/><button>Save Job</button>
+                  </form>
+                </div>
+                <script>
+                const cityMap = {json.dumps(CITIES_BY_COUNTRY)};
+                const countrySel = document.getElementById('job-country');
+                const citySel = document.getElementById('job-city');
+                function refreshJobCities() {{
+                    const country = countrySel.value;
+                    const cities = cityMap[country] || [];
+                    citySel.innerHTML = cities.map(c => `<option value="${{c}}">${{c}}</option>`).join('');
+                }}
+                countrySel.addEventListener('change', refreshJobCities);
+                refreshJobCities();
+                </script>
+                """
                 return self._send(200, page("Job Intake", body), "text/html; charset=utf-8")
 
             if p == "/salary-intel":
                 jobs = list_jobs()
                 profile = get_profile() or {"countries": [], "target_positions": [], "minimum_salary_usd": 0}
-                if not jobs:
-                    return self._send(200, page("Salary Intelligence", "<div class='card'>No jobs yet. Add a job first.</div>"), "text/html; charset=utf-8")
-                selected = int((q.get("job_id") or [str(jobs[0]["id"])])[0])
-                job = next((j for j in jobs if int(j["id"]) == selected), jobs[0])
                 pref = (get_profile() or {}).get("preferred_currency", "USD")
+                selected = int((q.get("job_id") or [str(jobs[0]["id"] if jobs else 0)])[0] or 0)
+                manual_company = (q.get("company") or [""])[0].strip()
+                manual_position = (q.get("position") or [""])[0].strip()
+                manual_country = (q.get("country") or ["Germany"])[0].strip() or "Germany"
+                manual_city = (q.get("city") or [""])[0].strip()
+                manual_description = (q.get("description") or [""])[0].strip()
+
+                if manual_company and manual_position:
+                    inferred = infer_job_facts(manual_company, manual_position, manual_country, manual_description)
+                    job = {
+                        "id": 0,
+                        "company": manual_company,
+                        "position": manual_position,
+                        "country": manual_country,
+                        "city": manual_city,
+                        "description": manual_description,
+                        "salary_currency": inferred["salary_currency"],
+                        "salary_amount": inferred["salary_amount"],
+                        "salary_usd": inferred["salary_usd"],
+                        "seniority": inferred["seniority"],
+                        "questions": inferred["questions"],
+                    }
+                elif jobs:
+                    job = next((j for j in jobs if int(j["id"]) == selected), jobs[0])
+                else:
+                    job = {
+                        "id": 0,
+                        "company": "Sample Company",
+                        "position": "Head of Digital",
+                        "country": "Germany",
+                        "city": "Munich",
+                        "description": "Digital transformation and analytics leadership.",
+                        "salary_currency": "EUR",
+                        "salary_amount": 0,
+                        "salary_usd": 0,
+                        "seniority": "senior",
+                        "questions": [],
+                    }
+
                 report = estimate_salary(job, jobs, target_currency=pref)
                 match = profile_match_score(profile, job)
-                options = "".join(f"<option value='{j['id']}' {'selected' if int(j['id'])==int(job['id']) else ''}>{esc(j['company'])} - {esc(j['position'])}</option>" for j in jobs)
+                options = "".join(f"<option value='{j['id']}' {'selected' if int(j['id'])==int(job.get('id',0)) else ''}>{esc(j['company'])} - {esc(j['position'])}</option>" for j in jobs)
+                job_picker = f"<label>Saved Job</label><select name='job_id'>{options}</select>" if jobs else "<p class='hint'>Henüz kayıtlı job yok. Manuel analiz yapabilirsiniz.</p>"
                 body = (
-                    f"<div class='card'><form method='get' action='/salary-intel'><label>Job</label><select name='job_id'>{options}</select><br/><br/><button>Analyze</button></form></div>"
+                    f"<div class='card'><form method='get' action='/salary-intel'>{job_picker}<br/><button>Analyze Saved Job</button></form></div>"
+                    f"<div class='card'><form method='get' action='/salary-intel'><label>Company</label><input name='company' value='{esc(manual_company)}' required/><label>Position</label><input name='position' value='{esc(manual_position)}' required/><label>Country</label><input name='country' value='{esc(manual_country)}'/><label>City</label><input name='city' value='{esc(manual_city)}'/><label>Description</label><textarea name='description' rows='4'>{esc(manual_description)}</textarea><br/><button>Analyze Manual</button></form></div>"
                     f"<div class='grid'><div class='card'><span class='badge'>Profile Match</span><h3>{match['match_percent']}%</h3><pre>{esc(json.dumps(match['details'], ensure_ascii=False, indent=2))}</pre></div>"
                     f"<div class='card'><span class='badge'>Expected Salary</span><h3>{report['expected_salary']} {report['currency']}</h3><p>Policy vs Market: {report['policy_vs_market_pct']}%</p><p>Market Range: {report['market_range'][0]} - {report['market_range'][1]} {report['currency']}</p><p>{esc(report['method'])}</p><p>Evidence: {esc(report['evidence_source'])}</p></div></div>"
                 )
@@ -423,11 +558,14 @@ class AppHandler(BaseHTTPRequestHandler):
 
             if p == "/dashboard":
                 rows = "".join(
-                    f"<tr><td>{esc(a['company'])}</td><td>{esc(a['position'])}</td><td>{esc(a['country'])}</td><td>{esc(a['salary_amount'])} {esc(a['salary_currency'])}</td><td>{esc(a['cv_title'])}</td><td>{esc(a['status'])}</td><td>{esc(a['notes'])}</td><td><a href='/cover-letters'>Open</a> | <a href='/salary-intel?job_id={esc(a['job_id'])}'>Salary Intel</a></td><td><pre>{esc(json.dumps(a['answers'], ensure_ascii=False, indent=2))}</pre></td><td>{esc(a['created_at'])}</td></tr>"
+                    f"<tr><td>{esc(a['company'])}</td><td>{esc(a['position'])}</td><td>{esc(a['country'])} / {esc(a.get('city',''))}</td><td>{esc(a['salary_amount'])} {esc(a['salary_currency'])}</td><td>{esc(a['cv_title'])}</td><td>{esc(a['status'])}</td><td>{esc(a['notes'])}</td><td><a href='/cover-letters'>Open</a> | <a href='/salary-intel?job_id={esc(a['job_id'])}'>Salary Intel</a></td><td><pre>{esc(json.dumps(a['answers'], ensure_ascii=False, indent=2))}</pre></td><td>{esc(a['created_at'])}</td></tr>"
                     for a in list_applications()
                 )
                 empty_app = "<tr><td colspan='10'>No applications yet.</td></tr>"
-                body = f"<div class='card'><form method='post' action='/auto-apply'><button>Generate Applications</button></form></div><div class='card'><table><thead><tr><th>Company</th><th>Position</th><th>Country</th><th>Salary</th><th>CV</th><th>Status</th><th>Notes</th><th>Links</th><th>Answers</th><th>Date</th></tr></thead><tbody>{rows or empty_app}</tbody></table></div>"
+                msg = (q.get('msg') or [''])[0]
+                nice_msg = msg.replace('applications_created:', 'Applications created: ').replace('_', ' ') if msg else ''
+                alert = f"<div class='card'><strong>{esc(nice_msg)}</strong></div>" if msg else ''
+                body = f"{alert}<div class='card'><form method='post' action='/auto-apply'><button>Generate Applications</button></form></div><div class='card'><table><thead><tr><th>Company</th><th>Position</th><th>Country/City</th><th>Salary</th><th>CV</th><th>Status</th><th>Notes</th><th>Links</th><th>Answers</th><th>Date</th></tr></thead><tbody>{rows or empty_app}</tbody></table></div>"
                 return self._send(200, page("Application Dashboard", body), "text/html; charset=utf-8")
 
             if p == "/cover-letters":

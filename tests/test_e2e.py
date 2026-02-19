@@ -61,6 +61,7 @@ def test_full_flow_and_interview_pages():
             "company": "Acme AI",
             "position": "Head of CRM",
             "country": "Germany",
+            "city": "Berlin",
             "salary_amount": 100000,
             "salary_currency": "EUR",
             "salary_usd": 108000,
@@ -88,4 +89,18 @@ def test_full_flow_and_interview_pages():
     assert "country-picker" in profile_page
 
     s, jobs_page = api_get_text("/jobs/new")
-    assert "ek sorular" in jobs_page
+    assert "job-city" in jobs_page
+
+
+    s, cv_page = api_get_text("/cvs/upload")
+    assert "/cvs/preview?id=" in cv_page
+
+    s, preview_page = api_get_text("/cvs/preview?id=1")
+    assert "CV Preview" in preview_page
+
+    s, salary_page = api_get_text("/salary-intel?company=Acme&position=Head%20of%20CRM&country=Germany&city=Berlin")
+    assert "Analyze Manual" in salary_page
+
+    s, jobs_new = api_get_text("/jobs/new")
+    assert "job-city" in jobs_new
+    assert "Salary Amount" not in jobs_new

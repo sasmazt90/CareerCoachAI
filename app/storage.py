@@ -64,6 +64,7 @@ def init_db() -> None:
                 company TEXT NOT NULL,
                 position TEXT NOT NULL,
                 country TEXT NOT NULL,
+                city TEXT NOT NULL DEFAULT '',
                 salary_amount REAL NOT NULL DEFAULT 0,
                 salary_currency TEXT NOT NULL DEFAULT 'USD',
                 salary_usd INTEGER NOT NULL DEFAULT 0,
@@ -114,6 +115,7 @@ def init_db() -> None:
         _add_column_if_missing(conn, "profile", "locations", "locations TEXT NOT NULL DEFAULT '[]'")
         _add_column_if_missing(conn, "cvs", "original_filename", "original_filename TEXT")
         _add_column_if_missing(conn, "cvs", "stored_path", "stored_path TEXT")
+        _add_column_if_missing(conn, "jobs", "city", "city TEXT NOT NULL DEFAULT ''")
         _add_column_if_missing(conn, "jobs", "salary_amount", "salary_amount REAL NOT NULL DEFAULT 0")
         _add_column_if_missing(conn, "jobs", "salary_currency", "salary_currency TEXT NOT NULL DEFAULT 'USD'")
         _add_column_if_missing(conn, "jobs", "salary_usd", "salary_usd INTEGER NOT NULL DEFAULT 0")
@@ -233,11 +235,12 @@ def add_job(payload: dict) -> int:
 
     with get_conn() as conn:
         cur = conn.execute(
-            "INSERT INTO jobs (company, position, country, salary_amount, salary_currency, salary_usd, description, questions, seniority, source_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO jobs (company, position, country, city, salary_amount, salary_currency, salary_usd, description, questions, seniority, source_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 payload["company"],
                 payload["position"],
                 payload["country"],
+                payload.get("city", ""),
                 amount,
                 currency,
                 salary_usd,
@@ -284,7 +287,7 @@ def list_applications() -> list[dict]:
     with get_conn() as conn:
         rows = conn.execute(
             """
-            SELECT a.id, a.job_id, j.company, j.position, j.country, j.salary_amount, j.salary_currency, j.salary_usd,
+            SELECT a.id, a.job_id, j.company, j.position, j.country, j.city, j.salary_amount, j.salary_currency, j.salary_usd,
                    c.title as cv_title, a.tailored_cv, a.cover_letter, a.answers, a.status, a.notes, a.created_at
             FROM applications a
             JOIN jobs j ON j.id = a.job_id

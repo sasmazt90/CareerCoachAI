@@ -28,3 +28,22 @@ def test_init_db_adds_missing_cvs_columns_for_legacy_db():
         for f in uploads.iterdir():
             if f.is_file():
                 f.unlink()
+
+
+def test_init_db_adds_missing_jobs_city_column_for_legacy_db():
+    if DB_PATH.exists():
+        DB_PATH.unlink()
+
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "CREATE TABLE jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, company TEXT NOT NULL, position TEXT NOT NULL, country TEXT NOT NULL, salary_amount REAL NOT NULL DEFAULT 0, salary_currency TEXT NOT NULL DEFAULT 'USD', salary_usd INTEGER NOT NULL DEFAULT 0, description TEXT NOT NULL, questions TEXT NOT NULL, seniority TEXT NOT NULL, source_url TEXT)"
+        )
+
+    init_db()
+
+    with sqlite3.connect(DB_PATH) as conn:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+    assert "city" in cols
+
+    if DB_PATH.exists():
+        DB_PATH.unlink()
