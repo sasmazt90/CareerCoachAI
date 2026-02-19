@@ -39,6 +39,7 @@ def init_db() -> None:
                 full_name TEXT NOT NULL,
                 email TEXT NOT NULL,
                 countries TEXT NOT NULL,
+                locations TEXT NOT NULL DEFAULT '[]',
                 target_positions TEXT NOT NULL,
                 minimum_salary_usd INTEGER NOT NULL,
                 preferred_currency TEXT NOT NULL DEFAULT 'USD',
@@ -110,6 +111,7 @@ def init_db() -> None:
             """
         )
         _add_column_if_missing(conn, "profile", "preferred_currency", "preferred_currency TEXT NOT NULL DEFAULT 'USD'")
+        _add_column_if_missing(conn, "profile", "locations", "locations TEXT NOT NULL DEFAULT '[]'")
         _add_column_if_missing(conn, "jobs", "salary_amount", "salary_amount REAL NOT NULL DEFAULT 0")
         _add_column_if_missing(conn, "jobs", "salary_currency", "salary_currency TEXT NOT NULL DEFAULT 'USD'")
         _add_column_if_missing(conn, "jobs", "salary_usd", "salary_usd INTEGER NOT NULL DEFAULT 0")
@@ -160,15 +162,17 @@ def get_openai_api_key() -> str:
 
 def upsert_profile(payload: dict) -> None:
     preferred_currency = payload.get("preferred_currency", "USD")
+    locations = payload.get("locations") or [{"country": c, "city": ""} for c in payload.get("countries", [])]
     with get_conn() as conn:
         conn.execute(
             """
-            INSERT INTO profile (id, full_name, email, countries, target_positions, minimum_salary_usd, preferred_currency, career_history)
-            VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO profile (id, full_name, email, countries, locations, target_positions, minimum_salary_usd, preferred_currency, career_history)
+            VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 full_name = excluded.full_name,
                 email = excluded.email,
                 countries = excluded.countries,
+                locations = excluded.locations,
                 target_positions = excluded.target_positions,
                 minimum_salary_usd = excluded.minimum_salary_usd,
                 preferred_currency = excluded.preferred_currency,
@@ -178,6 +182,7 @@ def upsert_profile(payload: dict) -> None:
                 payload["full_name"],
                 payload["email"],
                 json.dumps(payload["countries"]),
+                json.dumps(locations),
                 json.dumps(payload["target_positions"]),
                 payload["minimum_salary_usd"],
                 preferred_currency,
@@ -196,6 +201,7 @@ def get_profile() -> dict | None:
             "full_name": row["full_name"],
             "email": row["email"],
             "countries": json.loads(row["countries"]),
+            "locations": json.loads(row["locations"] or "[]"),
             "target_positions": json.loads(row["target_positions"]),
             "minimum_salary_usd": row["minimum_salary_usd"],
             "preferred_currency": row["preferred_currency"],

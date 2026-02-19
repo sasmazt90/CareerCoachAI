@@ -43,7 +43,7 @@ def test_full_flow_and_interview_pages():
         {
             "full_name": "Ada Lovelace",
             "email": "ada@example.com",
-            "countries": ["Germany", "Netherlands"],
+            "locations_json": json.dumps([{"country": "Germany", "city": "Berlin"}, {"country": "Netherlands", "city": "Amsterdam"}]),
             "target_positions": "Head of Digital and CRM, Data Scientist",
             "minimum_salary_amount": "90000",
             "preferred_currency": "USD",
@@ -82,3 +82,10 @@ def test_full_flow_and_interview_pages():
         s, t = api_get_text(page)
         assert s == 200
         assert "<html" in t
+
+    s, profile_page = api_get_text("/profile-form")
+    assert "Target Locations (Country + City)" in profile_page
+    assert "country-picker" in profile_page
+
+    s, jobs_page = api_get_text("/jobs/new")
+    assert "ek sorular" in jobs_page
