@@ -1,0 +1,16 @@
+[project]
+name = "careercoachai"
+version = "0.3.0"
+description = "AIApply-like automated job application platform"
+requires-python = ">=3.10"
+dependencies = [
+  "openai>=1.60.0",
+  "pypdf>=5.0.0",
+  "python-docx>=1.1.2"
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
