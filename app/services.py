@@ -176,13 +176,17 @@ def interview_generate_question(job: dict, stage: int, history: list[dict], prof
         f"You are {interviewer}. Ask one realistic interview question for role {job['position']} at seniority {job.get('seniority','mid')}. "
         "Return only the question sentence."
     )
+    fallback = "Can you walk me through a project where you delivered measurable impact relevant to this role?"
     if api_key:
         prompt = (
             f"Job: {job}\nProfile: {profile}\nKnowledge: {cv_knowledge}\n"
             f"Previous interview messages: {history}\n{base}"
         )
-        return generate_text(api_key, SYSTEM_PROMPT, prompt)
-    return "Can you walk me through a project where you delivered measurable impact relevant to this role?"
+        try:
+            return generate_text(api_key, SYSTEM_PROMPT, prompt)
+        except Exception:
+            return fallback
+    return fallback
 
 
 def interview_score(job: dict, stage: int, history: list[dict], profile: dict, cv_knowledge: str, api_key: str = "", audio_summary: dict | None = None) -> dict:

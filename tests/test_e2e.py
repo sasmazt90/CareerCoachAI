@@ -79,7 +79,7 @@ def test_full_flow_and_interview_pages():
     s, apps = api_get_json("/applications")
     assert s == 200 and len(apps) == 1
 
-    for page in ["/", "/dashboard", "/salary-intel", "/cover-letters", "/interview", "/settings", "/profile-form", "/jobs/new", "/cvs/upload"]:
+    for page in ["/", "/dashboard", "/salary-intel", "/cover-letters", "/interview", "/settings", "/profile-form", "/jobs/new", "/jobs/list", "/cvs/upload"]:
         s, t = api_get_text(page)
         assert s == 200
         assert "<html" in t
@@ -104,3 +104,11 @@ def test_full_flow_and_interview_pages():
     s, jobs_new = api_get_text("/jobs/new")
     assert "job-city" in jobs_new
     assert "Salary Amount" not in jobs_new
+
+
+    s, jobs_list = api_get_text("/jobs/list")
+    assert "Add New" in jobs_list
+    assert "Generate Resume" in jobs_list or "View Resume" in jobs_list
+
+    s, cl_view = api_get_text("/cover-letter/view?app_id=1")
+    assert "Download PDF" in cl_view

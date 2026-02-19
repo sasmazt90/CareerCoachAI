@@ -130,6 +130,70 @@ def infer_job_facts(company: str, position: str, country: str, description: str)
         "questions": DEFAULT_SCREENING_QUESTIONS,
     }
 
+def fmt_num(v: float | int, digits: int = 2) -> str:
+    return f"{float(v):,.{digits}f}"
+
+
+def _escape_pdf_text(text: str) -> str:
+    return text.replace('\\', '\\\\').replace('(', '\\(').replace(')', '\\)')
+
+
+def simple_pdf_from_text(title: str, body: str) -> bytes:
+    lines = [title, ""] + body.splitlines()
+    y = 790
+    text_ops = ["BT", "/F1 11 Tf", "50 815 Td", f"({_escape_pdf_text(title)}) Tj", "ET"]
+    for line in lines[1:]:
+        y -= 14
+        if y < 50:
+            break
+        text_ops += ["BT", "/F1 10 Tf", f"50 {y} Td", f"({_escape_pdf_text(line[:140])}) Tj", "ET"]
+    content = "\n".join(text_ops).encode("latin-1", errors="replace")
+    objs = [
+        b"1 0 obj<< /Type /Catalog /Pages 2 0 R >>endobj\n",
+        b"2 0 obj<< /Type /Pages /Kids [3 0 R] /Count 1 >>endobj\n",
+        b"3 0 obj<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>endobj\n",
+        b"4 0 obj<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>endobj\n",
+        f"5 0 obj<< /Length {len(content)} >>stream\n".encode() + content + b"\nendstream endobj\n",
+    ]
+    out = bytearray(b"%PDF-1.4\n")
+    offs = [0]
+    for o in objs:
+        offs.append(len(out)); out.extend(o)
+    xref = len(out)
+    out.extend(f"xref\n0 {len(offs)}\n".encode())
+    out.extend(b"0000000000 65535 f \n")
+    for off in offs[1:]:
+        out.extend(f"{off:010d} 00000 n \n".encode())
+    out.extend(f"trailer<< /Size {len(offs)} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF".encode())
+    return bytes(out)
+
+
+def latest_app_by_job(job_id: int) -> dict | None:
+    for a in list_applications():
+        if int(a.get("job_id", 0)) == int(job_id):
+            return a
+    return None
+
+
+def ensure_assets_for_job(job: dict, regenerate: bool = False) -> dict:
+    existing = latest_app_by_job(int(job["id"]))
+    if existing and not regenerate:
+        return existing
+    profile, cvs = get_profile() or {}, list_cvs()
+    if not profile or not cvs:
+        raise RuntimeError("Profile and at least one CV are required")
+    key = get_openai_api_key()
+    try:
+        corpus = build_cv_knowledge(cvs, profile, key)
+    except Exception:
+        corpus = build_cv_knowledge(cvs, profile, "")
+    cv = tailor_cv(cvs[0]["content"], job, profile, corpus, key)
+    cl = create_cover_letter(job, profile, corpus, key)
+    ans = auto_answer_questions(job.get("questions", []), profile, job, corpus, key)
+    add_application(job["id"], cvs[0]["id"], cv, cl, ans, status="ready_to_submit", notes="job_assets")
+    return latest_app_by_job(int(job["id"])) or {}
+
+
 def esc(v: object) -> str:
     return html.escape(str(v))
 
@@ -155,7 +219,7 @@ def page(title: str, body: str) -> str:
     .pill{{display:inline-block;padding:6px 10px;border-radius:999px;background:#131d37;border:1px solid #2f3c5b;margin:0 6px 6px 0}}
     </style></head><body><div class='wrap'>
     <div class='top'><h2>{esc(title)}</h2><div class='nav'>
-      <a href='/'>Home</a><a href='/profile-form'>Profile</a><a href='/cvs/upload'>CV Upload</a><a href='/jobs/new'>Jobs</a><a href='/salary-intel'>Salary Intel</a>
+      <a href='/'>Home</a><a href='/profile-form'>Profile</a><a href='/cvs/upload'>CV Upload</a><a href='/jobs/list'>Jobs</a><a href='/salary-intel'>Salary Intel</a>
       <a href='/settings'>OpenAI</a><a href='/dashboard'>Dashboard</a><a href='/cover-letters'>Cover Letters</a><a href='/interview'>Interview</a>
     </div></div>{body}</div></body></html>
     """
@@ -256,7 +320,7 @@ class AppHandler(BaseHTTPRequestHandler):
                         "source_url": (f.get("source_url") or [""])[0],
                     }
                 )
-                return self._redirect("/dashboard?msg=job_saved")
+                return self._redirect("/jobs/list?msg=job_saved")
 
             if p == "/cvs/upload":
                 fs = cgi.FieldStorage(fp=self.rfile, headers=self.headers, environ={"REQUEST_METHOD": "POST", "CONTENT_TYPE": self.headers.get("Content-Type", "")})
@@ -340,7 +404,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 add_interview_message(iid, "candidate", answer)
                 if audio_metrics is not None:
                     add_interview_message(iid, "audio_analyst", json.dumps(audio_metrics))
-                q = interview_generate_question(job, iv["stage"], list_interview_messages(iid), get_profile() or {}, build_cv_knowledge(list_cvs(), get_profile() or {}, get_openai_api_key()), get_openai_api_key())
+                knowledge = build_cv_knowledge(list_cvs(), get_profile() or {}, "")
+                q = interview_generate_question(job, iv["stage"], list_interview_messages(iid), get_profile() or {}, knowledge, get_openai_api_key())
                 add_interview_message(iid, "interviewer", q)
                 return self._redirect(f"/interview/session?id={iid}")
 
@@ -482,7 +547,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     <label>City</label><select id='job-city' name='city'></select>
                     <label>Description</label><textarea name='description' rows='5' required></textarea>
                     <label>Source URL</label><input name='source_url'/>
-                    <p class='hint'>Seniority, currency, salary ve screening questions bilgileri otomatik olarak AI/heuristic ile çıkarılır.</p>
+                    <p class='hint'>Seniority, currency, salary ve screening questions otomatik çıkarılır.</p>
                     <br/><button>Save Job</button>
                   </form>
                 </div>
@@ -501,6 +566,86 @@ class AppHandler(BaseHTTPRequestHandler):
                 """
                 return self._send(200, page("Job Intake", body), "text/html; charset=utf-8")
 
+            if p == "/jobs/list":
+                jobs = list_jobs()
+                rows = []
+                for j in jobs:
+                    app = latest_app_by_job(int(j["id"]))
+                    if app:
+                        resume_actions = f"<a href='/jobs/resume/view?job_id={j['id']}'>View Resume</a> | <a href='/jobs/resume/regenerate?job_id={j['id']}'>Regenerate</a>"
+                    else:
+                        resume_actions = f"<a href='/jobs/resume/generate?job_id={j['id']}'>Generate Resume</a>"
+                    actions = " | ".join([
+                        f"<a href='/jobs/view?id={j['id']}'>View</a>",
+                        f"<a href='/salary-intel?job_id={j['id']}'>Expected Salary</a>",
+                        f"<a href='/jobs/cover-letter?job_id={j['id']}'>Cover Letter</a>",
+                        resume_actions,
+                    ])
+                    rows.append(f"<tr><td>{esc(j['company'])}</td><td>{esc(j['position'])}</td><td>{esc(j.get('country',''))} / {esc(j.get('city',''))}</td><td>{fmt_num(j.get('salary_amount',0))} {esc(j.get('salary_currency','USD'))}</td><td>{actions}</td></tr>")
+                table_rows = ''.join(rows) or "<tr><td colspan='5'>No jobs yet.</td></tr>"
+                body = f"<div class='card'><a class='pill' href='/jobs/new'>Add New</a></div><div class='card'><table><thead><tr><th>Company</th><th>Position</th><th>Country/City</th><th>Expected Salary</th><th>Actions</th></tr></thead><tbody>{table_rows}</tbody></table></div>"
+                return self._send(200, page("Jobs", body), "text/html; charset=utf-8")
+
+            if p == "/jobs/view":
+                jid = int((q.get("id") or ["0"])[0] or 0)
+                job = get_job(jid)
+                if not job:
+                    return self._send(404, page("Job View", "<div class='card'>Job not found.</div>"), "text/html; charset=utf-8")
+                body = f"<div class='card'><h3>{esc(job['company'])} — {esc(job['position'])}</h3><p><strong>Location:</strong> {esc(job.get('country',''))} / {esc(job.get('city',''))}</p><p><strong>Expected Salary:</strong> {fmt_num(job.get('salary_amount',0))} {esc(job.get('salary_currency','USD'))}</p><p><strong>Seniority:</strong> {esc(job.get('seniority',''))}</p><pre>{esc(job.get('description',''))}</pre></div>"
+                return self._send(200, page("Job View", body), "text/html; charset=utf-8")
+
+            if p in {"/jobs/cover-letter", "/jobs/resume/generate", "/jobs/resume/regenerate"}:
+                jid = int((q.get("job_id") or ["0"])[0] or 0)
+                job = get_job(jid)
+                if not job:
+                    return self._send(404, page("Jobs", "<div class='card'>Job not found.</div>"), "text/html; charset=utf-8")
+                try:
+                    app = ensure_assets_for_job(job, regenerate=(p == "/jobs/resume/regenerate"))
+                except Exception as exc:
+                    return self._send(400, page("Jobs", f"<div class='card'>{esc(str(exc))}</div>"), "text/html; charset=utf-8")
+                if p == "/jobs/cover-letter":
+                    return self._redirect(f"/cover-letter/view?app_id={app.get('id', 0)}")
+                return self._redirect(f"/jobs/resume/view?job_id={jid}")
+
+            if p == "/jobs/resume/view":
+                jid = int((q.get("job_id") or ["0"])[0] or 0)
+                app = latest_app_by_job(jid)
+                if not app:
+                    return self._send(404, page("Resume", "<div class='card'>Resume not generated for this job.</div>"), "text/html; charset=utf-8")
+                body = f"<div class='card'><h3>Generated Resume</h3><pre>{esc(app.get('tailored_cv',''))}</pre><p><a href='/jobs/resume/regenerate?job_id={jid}'>Regenerate</a></p></div>"
+                return self._send(200, page("Generated Resume", body), "text/html; charset=utf-8")
+
+            if p == "/cover-letter/view":
+                app_id = int((q.get("app_id") or ["0"])[0] or 0)
+                app = next((a for a in list_applications() if int(a.get("id", 0)) == app_id), None)
+                if not app:
+                    return self._send(404, page("Cover Letter", "<div class='card'>Cover letter not found.</div>"), "text/html; charset=utf-8")
+                body = f"""
+                <div class='card'>
+                  <div style='background:#fff;color:#111;padding:36px;border-radius:12px;max-width:900px;margin:auto;font-family:Georgia,serif;line-height:1.6'>
+                    <h2 style='margin:0 0 8px 0'>{esc(app.get('company',''))} — Cover Letter</h2>
+                    <p style='color:#555;margin-top:0'>{esc(app.get('position',''))}</p>
+                    <hr/>
+                    <div style='white-space:pre-wrap'>{esc(app.get('cover_letter',''))}</div>
+                  </div>
+                  <p style='margin-top:14px'><a href='/cover-letter/download?app_id={app_id}'>Download PDF</a></p>
+                </div>
+                """
+                return self._send(200, page("Cover Letter", body), "text/html; charset=utf-8")
+
+            if p == "/cover-letter/download":
+                app_id = int((q.get("app_id") or ["0"])[0] or 0)
+                app = next((a for a in list_applications() if int(a.get("id", 0)) == app_id), None)
+                if not app:
+                    return self._send(404, {"error": "cover letter not found"})
+                pdf = simple_pdf_from_text(f"Cover Letter - {app.get('company','')}", app.get("cover_letter", ""))
+                self.send_response(200)
+                self.send_header("Content-Type", "application/pdf")
+                self.send_header("Content-Disposition", f"attachment; filename=cover_letter_{app_id}.pdf")
+                self.end_headers()
+                self.wfile.write(pdf)
+                return
+
             if p == "/salary-intel":
                 jobs = list_jobs()
                 profile = get_profile() or {"countries": [], "target_positions": [], "minimum_salary_usd": 0}
@@ -514,51 +659,26 @@ class AppHandler(BaseHTTPRequestHandler):
 
                 if manual_company and manual_position:
                     inferred = infer_job_facts(manual_company, manual_position, manual_country, manual_description)
-                    job = {
-                        "id": 0,
-                        "company": manual_company,
-                        "position": manual_position,
-                        "country": manual_country,
-                        "city": manual_city,
-                        "description": manual_description,
-                        "salary_currency": inferred["salary_currency"],
-                        "salary_amount": inferred["salary_amount"],
-                        "salary_usd": inferred["salary_usd"],
-                        "seniority": inferred["seniority"],
-                        "questions": inferred["questions"],
-                    }
+                    job = {"id": 0, "company": manual_company, "position": manual_position, "country": manual_country, "city": manual_city, "description": manual_description, "salary_currency": inferred["salary_currency"], "salary_amount": inferred["salary_amount"], "salary_usd": inferred["salary_usd"], "seniority": inferred["seniority"], "questions": inferred["questions"]}
                 elif jobs:
                     job = next((j for j in jobs if int(j["id"]) == selected), jobs[0])
                 else:
-                    job = {
-                        "id": 0,
-                        "company": "Sample Company",
-                        "position": "Head of Digital",
-                        "country": "Germany",
-                        "city": "Munich",
-                        "description": "Digital transformation and analytics leadership.",
-                        "salary_currency": "EUR",
-                        "salary_amount": 0,
-                        "salary_usd": 0,
-                        "seniority": "senior",
-                        "questions": [],
-                    }
+                    job = {"id": 0, "company": "Sample Company", "position": "Head of Digital", "country": "Germany", "city": "Munich", "description": "Digital transformation and analytics leadership.", "salary_currency": "EUR", "salary_amount": 0, "salary_usd": 0, "seniority": "senior", "questions": []}
 
                 report = estimate_salary(job, jobs, target_currency=pref)
                 match = profile_match_score(profile, job)
                 options = "".join(f"<option value='{j['id']}' {'selected' if int(j['id'])==int(job.get('id',0)) else ''}>{esc(j['company'])} - {esc(j['position'])}</option>" for j in jobs)
-                job_picker = f"<label>Saved Job</label><select name='job_id'>{options}</select>" if jobs else "<p class='hint'>Henüz kayıtlı job yok. Manuel analiz yapabilirsiniz.</p>"
                 body = (
-                    f"<div class='card'><form method='get' action='/salary-intel'>{job_picker}<br/><button>Analyze Saved Job</button></form></div>"
-                    f"<div class='card'><form method='get' action='/salary-intel'><label>Company</label><input name='company' value='{esc(manual_company)}' required/><label>Position</label><input name='position' value='{esc(manual_position)}' required/><label>Country</label><input name='country' value='{esc(manual_country)}'/><label>City</label><input name='city' value='{esc(manual_city)}'/><label>Description</label><textarea name='description' rows='4'>{esc(manual_description)}</textarea><br/><button>Analyze Manual</button></form></div>"
-                    f"<div class='grid'><div class='card'><span class='badge'>Profile Match</span><h3>{match['match_percent']}%</h3><pre>{esc(json.dumps(match['details'], ensure_ascii=False, indent=2))}</pre></div>"
-                    f"<div class='card'><span class='badge'>Expected Salary</span><h3>{report['expected_salary']} {report['currency']}</h3><p>Policy vs Market: {report['policy_vs_market_pct']}%</p><p>Market Range: {report['market_range'][0]} - {report['market_range'][1]} {report['currency']}</p><p>{esc(report['method'])}</p><p>Evidence: {esc(report['evidence_source'])}</p></div></div>"
+                    f"<div class='card'><details><summary><strong>Add New</strong> (Saved Job Analysis)</summary><form method='get' action='/salary-intel'><label>Saved Job</label><select name='job_id'>{options}</select><br/><button>Analyze</button></form></details></div>"
+                    f"<div class='card'><details><summary><strong>Add New</strong> (Manual Analysis)</summary><form method='get' action='/salary-intel'><label>Company</label><input name='company' value='{esc(manual_company)}' required/><label>Position</label><input name='position' value='{esc(manual_position)}' required/><label>Country</label><input name='country' value='{esc(manual_country)}'/><label>City</label><input name='city' value='{esc(manual_city)}'/><label>Description</label><textarea name='description' rows='4'>{esc(manual_description)}</textarea><br/><button>Analyze Manual</button></form></details></div>"
+                    f"<div class='grid'><div class='card'><span class='badge'>Profile Match</span><h3>{fmt_num(match['match_percent'],0)}%</h3><ul>{''.join(f'<li>{esc(d)}</li>' for d in match['details'])}</ul></div>"
+                    f"<div class='card'><span class='badge'>Expected Salary</span><h3>{fmt_num(report['expected_salary'])} {report['currency']}</h3><p>Policy vs Market: {fmt_num(report['policy_vs_market_pct'])}%</p><p>Market Range: {fmt_num(report['market_range'][0])} - {fmt_num(report['market_range'][1])} {report['currency']}</p><p>{esc(report['method'])}</p><p>Evidence: {esc(report['evidence_source'])}</p></div></div>"
                 )
                 return self._send(200, page("Salary Intelligence", body), "text/html; charset=utf-8")
 
             if p == "/dashboard":
                 rows = "".join(
-                    f"<tr><td>{esc(a['company'])}</td><td>{esc(a['position'])}</td><td>{esc(a['country'])} / {esc(a.get('city',''))}</td><td>{esc(a['salary_amount'])} {esc(a['salary_currency'])}</td><td>{esc(a['cv_title'])}</td><td>{esc(a['status'])}</td><td>{esc(a['notes'])}</td><td><a href='/cover-letters'>Open</a> | <a href='/salary-intel?job_id={esc(a['job_id'])}'>Salary Intel</a></td><td><pre>{esc(json.dumps(a['answers'], ensure_ascii=False, indent=2))}</pre></td><td>{esc(a['created_at'])}</td></tr>"
+                    f"<tr><td>{esc(a['company'])}</td><td>{esc(a['position'])}</td><td>{esc(a['country'])} / {esc(a.get('city',''))}</td><td>{fmt_num(a['salary_amount'])} {esc(a['salary_currency'])}</td><td>{esc(a['cv_title'])}</td><td>{esc(a['status'])}</td><td>{esc(a['notes'])}</td><td><a href='/cover-letter/view?app_id={esc(a['id'])}'>Cover Letter</a> | <a href='/salary-intel?job_id={esc(a['job_id'])}'>Salary Intel</a></td><td><pre>{esc(json.dumps(a['answers'], ensure_ascii=False, indent=2))}</pre></td><td>{esc(a['created_at'])}</td></tr>"
                     for a in list_applications()
                 )
                 empty_app = "<tr><td colspan='10'>No applications yet.</td></tr>"
@@ -569,9 +689,12 @@ class AppHandler(BaseHTTPRequestHandler):
                 return self._send(200, page("Application Dashboard", body), "text/html; charset=utf-8")
 
             if p == "/cover-letters":
-                rows = "".join(f"<tr><td>{esc(a['company'])}</td><td>{esc(a['position'])}</td><td><pre>{esc(a['cover_letter'])}</pre></td></tr>" for a in list_applications())
+                rows = "".join(
+                    f"<tr><td>{esc(a['company'])}</td><td>{esc(a['position'])}</td><td><a href='/cover-letter/view?app_id={a['id']}'>View</a> | <a href='/cover-letter/download?app_id={a['id']}'>Download PDF</a></td></tr>"
+                    for a in list_applications()
+                )
                 empty_cover = "<tr><td colspan='3'>No cover letters yet.</td></tr>"
-                body = f"<div class='card'><table><thead><tr><th>Company</th><th>Role</th><th>Cover Letter</th></tr></thead><tbody>{rows or empty_cover}</tbody></table></div>"
+                body = f"<div class='card'><table><thead><tr><th>Company</th><th>Role</th><th>Actions</th></tr></thead><tbody>{rows or empty_cover}</tbody></table></div>"
                 return self._send(200, page("Cover Letters", body), "text/html; charset=utf-8")
 
             if p == "/interview":
@@ -587,7 +710,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 msgs = list_interview_messages(iid)
                 if not msgs:
                     job = get_job(iv["job_id"]) or {}
-                    q1 = interview_generate_question(job, iv["stage"], [], get_profile() or {}, build_cv_knowledge(list_cvs(), get_profile() or {}, get_openai_api_key()), get_openai_api_key())
+                    knowledge = build_cv_knowledge(list_cvs(), get_profile() or {}, "")
+                    q1 = interview_generate_question(job, iv["stage"], [], get_profile() or {}, knowledge, get_openai_api_key())
                     add_interview_message(iid, "interviewer", q1)
                     msgs = list_interview_messages(iid)
                 rows = "".join(f"<tr><td>{esc(m['role'])}</td><td>{esc(m['content'])}</td></tr>" for m in msgs)
