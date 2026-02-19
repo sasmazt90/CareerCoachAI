@@ -152,13 +152,13 @@ def interview_generate_question(job: dict, stage: int, history: list[dict], prof
     return "Can you walk me through a project where you delivered measurable impact relevant to this role?"
 
 
-def interview_score(job: dict, stage: int, history: list[dict], profile: dict, cv_knowledge: str, api_key: str = "") -> dict:
+def interview_score(job: dict, stage: int, history: list[dict], profile: dict, cv_knowledge: str, api_key: str = "", audio_summary: dict | None = None) -> dict:
     if api_key:
         prompt = (
             "Evaluate the candidate interview from transcript. Return strict JSON with keys: "
             "position_fit, seniority_fit, culture_fit, english, communication_confidence, overall, recommendation, passed. "
-            "Scores should be 0-100. passed true if overall >= 75.\n"
-            f"Job:{job}\nProfile:{profile}\nKnowledge:{cv_knowledge}\nHistory:{history}"
+            "Scores should be 0-100. Include communication_confidence partly from provided audio summary if available. passed true if overall >= 75.\n"
+            f"Job:{job}\nProfile:{profile}\nKnowledge:{cv_knowledge}\nHistory:{history}\nAudioSummary:{audio_summary}"
         )
         raw = generate_text(api_key, SYSTEM_PROMPT, prompt)
         try:
@@ -172,7 +172,7 @@ def interview_score(job: dict, stage: int, history: list[dict], profile: dict, c
         "seniority_fit": 70,
         "culture_fit": 68,
         "english": 70,
-        "communication_confidence": 65,
+        "communication_confidence": int(audio_summary.get("confidence_index", 65) if audio_summary else 65),
         "overall": 69,
         "recommendation": "Improve clarity, add quantified outcomes.",
         "passed": False,

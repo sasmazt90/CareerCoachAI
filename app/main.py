@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from .audio_dsp import analyze_wav_bytes, parse_audio_metrics
 from .file_parsers import extract_text
 from .services import auto_answer_questions, build_cv_knowledge, create_cover_letter, interview_generate_question, interview_score, match_job, tailor_cv
 from .storage import (
@@ -137,10 +138,29 @@ class AppHandler(BaseHTTPRequestHandler):
             if p == "/interview/start":
                 f = self._form(); iid = create_interview(int((f.get("job_id") or ["0"])[0]), int((f.get("stage") or ["1"])[0])); return self._redirect(f"/interview/session?id={iid}")
             if p == "/interview/answer":
-                f = self._form(); iid = int((f.get("interview_id") or ["0"])[0]); answer = (f.get("answer") or [""])[0]
+                iid = 0
+                answer = ""
+                audio_metrics = None
+                ctype = self.headers.get("Content-Type", "")
+                if ctype.startswith("multipart/form-data"):
+                    fs = cgi.FieldStorage(fp=self.rfile, headers=self.headers, environ={"REQUEST_METHOD": "POST", "CONTENT_TYPE": ctype})
+                    iid = int((fs.getvalue("interview_id", "0") or "0"))
+                    answer = fs.getvalue("answer", "")
+                    audio_item = fs["audio_file"] if "audio_file" in fs else None
+                    if audio_item is not None and getattr(audio_item, "file", None):
+                        blob = audio_item.file.read()
+                        if blob:
+                            try:
+                                audio_metrics = analyze_wav_bytes(blob)
+                            except Exception:
+                                audio_metrics = {"error": "audio_parse_failed"}
+                else:
+                    f = self._form(); iid = int((f.get("interview_id") or ["0"])[0]); answer = (f.get("answer") or [""])[0]
                 iv = get_interview(iid); job = get_job(iv["job_id"]) if iv else None
                 if not iv or not job: return self._send(404, {"error": "interview not found"})
                 add_interview_message(iid, "candidate", answer)
+                if audio_metrics is not None:
+                    add_interview_message(iid, "audio_analyst", json.dumps(audio_metrics))
                 q = interview_generate_question(job, iv["stage"], list_interview_messages(iid), get_profile() or {}, build_cv_knowledge(list_cvs(), get_profile() or {}, get_openai_api_key()), get_openai_api_key())
                 add_interview_message(iid, "interviewer", q)
                 return self._redirect(f"/interview/session?id={iid}")
@@ -148,7 +168,9 @@ class AppHandler(BaseHTTPRequestHandler):
                 f = self._form(); iid = int((f.get("interview_id") or ["0"])[0]); iv = get_interview(iid)
                 if not iv: return self._send(404, {"error": "interview not found"})
                 job = get_job(iv["job_id"]) or {}
-                scoring = interview_score(job, iv["stage"], list_interview_messages(iid), get_profile() or {}, build_cv_knowledge(list_cvs(), get_profile() or {}, get_openai_api_key()), get_openai_api_key())
+                msgs = list_interview_messages(iid)
+                audio_summary = parse_audio_metrics(msgs)
+                scoring = interview_score(job, iv["stage"], msgs, get_profile() or {}, build_cv_knowledge(list_cvs(), get_profile() or {}, get_openai_api_key()), get_openai_api_key(), audio_summary=audio_summary)
                 overall = float(scoring.get("overall", 0)); passed = bool(scoring.get("passed", overall >= 75))
                 finalize_interview(iid, "passed" if passed else "failed", overall, scoring, str(scoring.get("recommendation", "")))
                 return self._redirect(f"/interview/session?id={iid}")
@@ -221,7 +243,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     elif iv["status"] == "passed": score += f"<form method='post' action='/interview/start'><input type='hidden' name='job_id' value='{esc(iv['job_id'])}'/><input type='hidden' name='stage' value='2'/><button>Go Stage 2</button></form>"
                     else: score += f"<form method='post' action='/interview/retry'><input type='hidden' name='interview_id' value='{esc(iid)}'/><button>Retry</button></form>"
                     score += "</div>"
-                body = f"<div class='card'><table><thead><tr><th>Role</th><th>Message</th></tr></thead><tbody>{rows}</tbody></table></div><div class='card'><form method='post' action='/interview/answer'><input type='hidden' name='interview_id' value='{esc(iid)}'/><textarea name='answer' rows='5' required></textarea><br/><br/><button>Send Answer</button></form><br/><form method='post' action='/interview/finish'><input type='hidden' name='interview_id' value='{esc(iid)}'/><button>Finish & Score</button></form></div>{score}"
+                body = f"<div class='card'><table><thead><tr><th>Role</th><th>Message</th></tr></thead><tbody>{rows}</tbody></table></div><div class='card'><form method='post' action='/interview/answer' enctype='multipart/form-data'><input type='hidden' name='interview_id' value='{esc(iid)}'/><label>Your answer (text or browser voice typing)</label><textarea name='answer' rows='5' required></textarea><label>Optional audio (.wav) for real-time DSP stress analysis</label><input type='file' name='audio_file' accept='.wav,audio/wav'/><br/><br/><button>Send Answer</button></form><br/><form method='post' action='/interview/finish'><input type='hidden' name='interview_id' value='{esc(iid)}'/><button>Finish & Score</button></form></div>{score}"
                 return self._send(200, page("Interview Session", body), "text/html; charset=utf-8")
             if p == "/cvs": return self._send(200, list_cvs())
             if p == "/jobs": return self._send(200, list_jobs())

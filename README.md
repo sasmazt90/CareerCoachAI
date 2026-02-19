@@ -11,6 +11,7 @@ Bu proje job intake + çoklu CV upload + OpenAI destekli içerik üretimi + ATS 
 - Cover Letter ayrı sayfa (`/cover-letters`)
 - Job intake (`/jobs/new`)
 - 2 aşamalı mülakat simülasyonu (`/interview`):
+  - real-time akustik (audio DSP) analizi: stress/confidence index (.wav upload)
   - Stage 1: HR Manager
   - Stage 2: Unit Manager
   - scoring + recommendation + retry + "YOU GOT THE JOB"
@@ -32,7 +33,7 @@ python -m app.main
 4. `/jobs/new` ilan ekle
 5. `/dashboard` Generate Applications
 6. `/cover-letters` cover letter görüntüle
-7. `/interview` mülakat simülasyonu
+7. `/interview` mülakat simülasyonu (metin + opsiyonel .wav ses yükleyerek DSP analizi)
 
 ## Önemli Not
 Sistem promptları “facts only / no hallucination” kuralıyla hazırlanmıştır.
