@@ -112,6 +112,8 @@ def init_db() -> None:
         )
         _add_column_if_missing(conn, "profile", "preferred_currency", "preferred_currency TEXT NOT NULL DEFAULT 'USD'")
         _add_column_if_missing(conn, "profile", "locations", "locations TEXT NOT NULL DEFAULT '[]'")
+        _add_column_if_missing(conn, "cvs", "original_filename", "original_filename TEXT")
+        _add_column_if_missing(conn, "cvs", "stored_path", "stored_path TEXT")
         _add_column_if_missing(conn, "jobs", "salary_amount", "salary_amount REAL NOT NULL DEFAULT 0")
         _add_column_if_missing(conn, "jobs", "salary_currency", "salary_currency TEXT NOT NULL DEFAULT 'USD'")
         _add_column_if_missing(conn, "jobs", "salary_usd", "salary_usd INTEGER NOT NULL DEFAULT 0")
