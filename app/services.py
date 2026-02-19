@@ -1,6 +1,13 @@
 from __future__ import annotations
 
 from .models import MatchResult
+from .openai_client import generate_text
+
+
+SYSTEM_PROMPT = (
+    "You are an expert job application assistant. Tailor CVs and write concise, high-impact, "
+    "truthful cover letters and application answers based only on provided profile/job info."
+)
 
 
 def match_job(profile: dict, job: dict) -> MatchResult:
@@ -16,7 +23,16 @@ def match_job(profile: dict, job: dict) -> MatchResult:
     return MatchResult(matched=True, reason="All criteria satisfied")
 
 
-def tailor_cv(cv: str, job: dict, profile: dict) -> str:
+def tailor_cv(cv: str, job: dict, profile: dict, api_key: str = "") -> str:
+    if api_key:
+        prompt = (
+            f"Candidate profile: {profile}\n\n"
+            f"Base CV:\n{cv}\n\n"
+            f"Job posting:\n{job}\n\n"
+            "Rewrite the CV for this role with achievements-first bullet points. Keep it ATS friendly."
+        )
+        return generate_text(api_key, SYSTEM_PROMPT, prompt)
+
     return (
         f"{cv}\n\n"
         f"--- Tailored Section for {job['position']} at {job['company']} ---\n"
@@ -27,7 +43,15 @@ def tailor_cv(cv: str, job: dict, profile: dict) -> str:
     )
 
 
-def create_cover_letter(job: dict, profile: dict) -> str:
+def create_cover_letter(job: dict, profile: dict, api_key: str = "") -> str:
+    if api_key:
+        prompt = (
+            f"Candidate profile: {profile}\n"
+            f"Job posting: {job}\n"
+            "Write a personalized one-page cover letter in English with concrete impact examples."
+        )
+        return generate_text(api_key, SYSTEM_PROMPT, prompt)
+
     return (
         f"Dear {job['company']} Hiring Team,\n\n"
         f"I am excited to apply for the {job['position']} role in {job['country']}. "
@@ -38,11 +62,20 @@ def create_cover_letter(job: dict, profile: dict) -> str:
     )
 
 
-def auto_answer_questions(questions: list[str], profile: dict, job: dict) -> dict[str, str]:
+def auto_answer_questions(questions: list[str], profile: dict, job: dict, api_key: str = "") -> dict[str, str]:
     answers: dict[str, str] = {}
     for q in questions:
-        answers[q] = (
-            f"Based on my experience ({profile['career_history']}), I can support "
-            f"{job['position']} outcomes by applying relevant project results and data-driven execution."
-        )
+        if api_key:
+            prompt = (
+                f"Candidate profile: {profile}\n"
+                f"Job posting: {job}\n"
+                f"Question: {q}\n"
+                "Write a concise and tailored answer (max 120 words)."
+            )
+            answers[q] = generate_text(api_key, SYSTEM_PROMPT, prompt)
+        else:
+            answers[q] = (
+                f"Based on my experience ({profile['career_history']}), I can support "
+                f"{job['position']} outcomes by applying relevant project results and data-driven execution."
+            )
     return answers

@@ -21,6 +21,17 @@ def api_post(path: str, payload: dict):
         return resp.status, json.loads(resp.read().decode("utf-8"))
 
 
+def api_post_form(path: str, data: str):
+    req = Request(
+        f"{BASE}{path}",
+        data=data.encode("utf-8"),
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    with urlopen(req) as resp:
+        return resp.status, resp.read().decode("utf-8")
+
+
 def api_get_json(path: str):
     with urlopen(f"{BASE}{path}") as resp:
         return resp.status, json.loads(resp.read().decode("utf-8"))
@@ -35,7 +46,7 @@ def test_full_auto_apply_flow():
     reset_db()
     thread = threading.Thread(target=run, kwargs={"host": "127.0.0.1", "port": 8010}, daemon=True)
     thread.start()
-    time.sleep(0.2)
+    time.sleep(0.3)
 
     status, _ = api_post(
         "/profile",
@@ -99,9 +110,16 @@ def test_full_auto_apply_flow():
 
     status, home = api_get_text("/")
     assert status == 200
-    assert "CareerCoachAI Hazır" in home
+    assert "CareerCoachAI Platform" in home
+
+    status, settings_html = api_get_text("/settings")
+    assert status == 200
+    assert "OpenAI API Secret" in settings_html
+
+    status, _ = api_post_form("/settings", "openai_api_key=sk-test-key")
+    assert status == 200
 
     status, dashboard = api_get_text("/dashboard")
     assert status == 200
-    assert "Başvuru Dashboard" in dashboard
+    assert "Application Dashboard" in dashboard
     assert "Acme AI" in dashboard
